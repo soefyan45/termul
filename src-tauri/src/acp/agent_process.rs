@@ -457,3 +457,6 @@ mod windows {
 
 #[cfg(all(test, windows))]
 mod tests;
+
+#[cfg(all(test, unix))]
+mod unix_tests;
