@@ -22,7 +22,9 @@ fn origin(c: &Ctx<'_>) -> String {
     c.fixtures.url("").trim_end_matches('/').to_string()
 }
 
-/// The call failed with `code` and `reason`.
+/// The call failed with `code` and `reason`. A failure with another code
+/// is the case's result as it is, so an engine without the verb reports
+/// `capability_unavailable`.
 fn expect_refusal(
     result: Result<serde_json::Value, Failure>,
     code: &str,
@@ -31,6 +33,7 @@ fn expect_refusal(
 ) -> CaseResult {
     match result {
         Err(f) if f.code == code && f.reason.as_deref() == Some(reason) => Ok(()),
+        Err(f) if f.code != code => Err(f),
         Err(f) => Err(mismatch(format!(
             "{what}: expected {code}/{reason}, got {}/{:?}",
             f.code, f.reason

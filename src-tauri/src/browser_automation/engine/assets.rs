@@ -44,6 +44,8 @@ pub const HOVER: Helper = helper!("hover");
 pub const CONTAINS_TEXT: Helper = helper!("contains_text");
 pub const READY_STATE: Helper = helper!("ready_state");
 pub const SENSITIVITY: Helper = helper!("sensitivity");
+/// Only CDP engines set a file input through the element itself.
+#[cfg(any(test, target_os = "windows"))]
 pub const FILE_INPUT: Helper = helper!("file_input");
 
 /// A helper with its parameters, ready for an engine.
@@ -114,6 +116,7 @@ pub fn sensitivity(path: Option<&str>) -> Script {
 
 /// The file input at `path` itself, for engines that set its files by
 /// element handle; null when `path` names anything else.
+#[cfg(any(test, target_os = "windows"))]
 pub fn file_input(path: &str) -> Script {
     Script::new(FILE_INPUT, json!({ "path": path }))
 }

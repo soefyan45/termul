@@ -56,8 +56,9 @@ fn attach_downloads(webview: &webkit2gtk::WebView, events: TabEvents) {
         download.connect_decide_destination(move |download, suggested| {
             let decided = download_url(download)
                 .and_then(|url| starting.download_starting(&url, Path::new(suggested)));
-            match decided {
-                Some(path) => download.set_destination(&path.to_string_lossy()),
+            // The 4.1 API takes the destination as a file URI, not a path.
+            match decided.and_then(|path| Url::from_file_path(path).ok()) {
+                Some(uri) => download.set_destination(uri.as_str()),
                 None => download.cancel(),
             }
             true
