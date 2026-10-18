@@ -136,7 +136,9 @@ impl DesktopBrowserHost {
         };
         let (session_id, tab_url, profile) = {
             let registry = self.registry.lock();
-            let record = registry.get(tab)?;
+            let Some(record) = registry.get(tab) else {
+                return refuse("tab_unknown");
+            };
             let (Some(session_id), Some(profile)) = (record.session_id(), record.profile()) else {
                 return refuse("not_an_agent_tab");
             };

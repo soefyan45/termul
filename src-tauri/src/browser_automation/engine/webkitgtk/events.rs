@@ -52,18 +52,17 @@ fn attach_downloads(webview: &webkit2gtk::WebView, events: TabEvents) {
         if download.web_view().as_ref() != Some(&own) {
             return;
         }
-        log::info!("[browser-agent] webkit download started");
-        let starting = events.clone();
-        download.connect_decide_destination(move |download, suggested| {
-            let decided = download_url(download)
-                .and_then(|url| starting.download_starting(&url, Path::new(suggested)));
-            // The 4.1 API takes the destination as a file URI, not a path.
-            match decided.and_then(|path| Url::from_file_path(path).ok()) {
-                Some(uri) => download.set_destination(uri.as_str()),
-                None => download.cancel(),
-            }
-            true
-        });
+        // The destination is set as the download starts: WebKitGTK does not
+        // ask agent-tab downloads for one before it creates the file. The
+        // 4.1 API takes it as a file URI, not a path.
+        let destination = download_url(download)
+            .and_then(|url| events.download_starting(&url, Path::new("")))
+            .and_then(|path| Url::from_file_path(path).ok());
+        let Some(destination) = destination else {
+            download.cancel();
+            return;
+        };
+        download.set_destination(destination.as_str());
         let failed = Rc::new(Cell::new(false));
         let failed_flag = failed.clone();
         download.connect_failed(move |_, _| {
