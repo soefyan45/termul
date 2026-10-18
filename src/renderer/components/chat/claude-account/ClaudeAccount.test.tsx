@@ -166,4 +166,73 @@ describe('ClaudeAccountChip', () => {
     const { container } = render(<ClaudeAccountChip sessionId="s1" />)
     expect(container).toBeEmptyDOMElement()
   })
+
+  async function openMenu(): Promise<void> {
+    const chip = await screen.findByRole('button', { name: /Claude account: Personal/ })
+    fireEvent.pointerDown(chip, { button: 0, ctrlKey: false })
+    await screen.findByRole('menuitem', { name: /Follow default/ })
+  }
+
+  it('does not switch to a signed-out account and says why', async () => {
+    api.list.mockResolvedValue({
+      accounts: [
+        { id: 'default', name: 'Personal', builtin: true, signedIn: true },
+        { id: 'ab12', name: 'Work', builtin: false, signedIn: false },
+        { id: 'cd34', name: 'Side', builtin: false, signedIn: true }
+      ],
+      defaultAccountId: 'default',
+      projectAccounts: {}
+    })
+    seed()
+    render(<ClaudeAccountChip sessionId="s1" />)
+    await openMenu()
+    const work = screen.getByRole('menuitem', { name: /Work/ })
+    expect(work).toHaveAttribute('aria-disabled', 'true')
+    expect(work).toHaveTextContent(/Signed out/)
+    fireEvent.click(work)
+    fireEvent.click(screen.getByRole('menuitem', { name: /Side/ }))
+    await waitFor(() =>
+      expect(switcher.switchProjectClaudeAccount).toHaveBeenCalledWith('office', 'cd34')
+    )
+    expect(switcher.switchProjectClaudeAccount).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not switch to an account whose sign-in the host could not confirm', async () => {
+    api.list.mockResolvedValue({
+      accounts: [
+        { id: 'default', name: 'Personal', builtin: true, signedIn: true },
+        { id: 'ab12', name: 'Work', builtin: false, signedIn: null }
+      ],
+      defaultAccountId: 'default',
+      projectAccounts: {}
+    })
+    seed()
+    render(<ClaudeAccountChip sessionId="s1" />)
+    await openMenu()
+    const work = screen.getByRole('menuitem', { name: /Work/ })
+    expect(work).toHaveAttribute('aria-disabled', 'true')
+    expect(work).toHaveTextContent(/Could not check sign-in/)
+    fireEvent.click(work)
+    expect(switcher.switchProjectClaudeAccount).not.toHaveBeenCalled()
+  })
+
+  it('does not follow a default account that is signed out', async () => {
+    api.list.mockResolvedValue({
+      accounts: [
+        { id: 'default', name: 'Personal', builtin: true, signedIn: false },
+        { id: 'ab12', name: 'Work', builtin: false, signedIn: true }
+      ],
+      defaultAccountId: 'default',
+      projectAccounts: { office: 'ab12' }
+    })
+    seed()
+    render(<ClaudeAccountChip sessionId="s1" />)
+    const chip = await screen.findByRole('button', { name: /Claude account: Work/ })
+    fireEvent.pointerDown(chip, { button: 0, ctrlKey: false })
+    const follow = await screen.findByRole('menuitem', { name: /Follow default/ })
+    expect(follow).toHaveAttribute('aria-disabled', 'true')
+    expect(follow).toHaveTextContent(/Personal.*signed out/i)
+    fireEvent.click(follow)
+    expect(switcher.switchProjectClaudeAccount).not.toHaveBeenCalled()
+  })
 })
