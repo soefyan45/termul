@@ -212,7 +212,7 @@ base64 = "0.22"
 rusqlite = { version = "0.32", features = ["bundled"] }
 # tokio utilities for agentation SSE broadcast + graceful shutdown (issue #451).
 tokio-stream = { version = "0.1", features = ["sync"] }
-tokio-util = { version = "0.7", features = ["rt"] }
+tokio-util = { version = "0.7", features = ["compat", "rt"] }
 
 [dev-dependencies]
 tauri = { version = "2.0", features = ["test"] }

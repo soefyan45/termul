@@ -13,7 +13,7 @@ use std::task::{Context, RawWaker, RawWakerVTable, Waker};
 use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{McpServer, McpServerStdio};
-use agent_client_protocol::{Channel, Client, ConnectTo};
+use agent_client_protocol::{Agent, Channel, Client, ConnectTo, ConnectionTo, LineDirection};
 
 use super::TreeKillAgent;
 
@@ -103,5 +103,173 @@ async fn idle_transport_stays_parked_under_a_relinked_waker() {
         polls <= 16,
         "an idle agent transport was polled {polls} times in 500 ms and woke itself {} times",
         relay.wakes.load(Ordering::Relaxed)
+    );
+}
+
+const PID_PREFIX: &str = "CHILD_PID=";
+const PID_TIMEOUT: Duration = Duration::from_secs(30);
+const EXIT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// A launcher that starts a long-lived `sleep` grandchild (a stand-in for a
+/// wrapper's self-spawned worker), prints its pid to stderr, then runs `tail`.
+fn launcher_agent(tail: &str) -> (TreeKillAgent, tokio::sync::mpsc::UnboundedReceiver<u32>) {
+    let script = format!("sleep 600 & echo {PID_PREFIX}$! >&2; {tail}");
+    let server = McpServer::Stdio(
+        McpServerStdio::new("fake-launcher", PathBuf::from("sh"))
+            .args(vec!["-c".to_string(), script]),
+    );
+    let (pid_tx, pid_rx) = tokio::sync::mpsc::unbounded_channel();
+    let agent = TreeKillAgent::new(server).with_debug(move |line, direction| {
+        if direction == LineDirection::Stderr {
+            if let Some(pid) = line.trim().strip_prefix(PID_PREFIX) {
+                if let Ok(pid) = pid.trim().parse() {
+                    let _ = pid_tx.send(pid);
+                }
+            }
+        }
+    });
+    (agent, pid_rx)
+}
+
+/// A reaped or zombie process is not alive.
+fn is_alive(pid: u32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => {
+                let state = stat.rfind(')').map(|end| &stat[end + 2..]);
+                !state.is_some_and(|state| state.starts_with('Z'))
+            }
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // SAFETY: signal 0 only checks that the pid exists.
+        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    }
+}
+
+fn wait_for_exit(pid: u32, timeout: Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while is_alive(pid) {
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    true
+}
+
+struct KillOnFail(u32);
+
+impl Drop for KillOnFail {
+    fn drop(&mut self) {
+        if is_alive(self.0) {
+            // SAFETY: `kill` has no memory-safety preconditions.
+            unsafe { libc::kill(self.0 as libc::pid_t, libc::SIGKILL) };
+        }
+    }
+}
+
+#[tokio::test]
+async fn dropping_the_connection_kills_the_agent_grandchild() {
+    let (agent, mut pid_rx) = launcher_agent("exec cat");
+    let connection = tokio::spawn(async move {
+        Client
+            .builder()
+            .connect_with(agent, async move |_cx: ConnectionTo<Agent>| {
+                futures::future::pending::<()>().await;
+                Ok(())
+            })
+            .await
+    });
+
+    let grandchild = tokio::time::timeout(PID_TIMEOUT, pid_rx.recv())
+        .await
+        .expect("fake launcher reported its grandchild in time")
+        .expect("pid channel open");
+    let _cleanup = KillOnFail(grandchild);
+    assert!(
+        is_alive(grandchild),
+        "grandchild should run while connected"
+    );
+
+    connection.abort();
+    let _ = connection.await;
+
+    assert!(
+        wait_for_exit(grandchild, EXIT_TIMEOUT),
+        "grandchild {grandchild} survived the dropped connection"
+    );
+}
+
+#[tokio::test]
+async fn launcher_exit_kills_the_grandchild_and_reports_stderr() {
+    let (agent, mut pid_rx) = launcher_agent("exit 3");
+    let result = tokio::time::timeout(
+        PID_TIMEOUT,
+        Client
+            .builder()
+            .connect_with(agent, async move |_cx: ConnectionTo<Agent>| {
+                futures::future::pending::<()>().await;
+                Ok(())
+            }),
+    )
+    .await
+    .expect("connection settles after the launcher exits");
+
+    let grandchild = pid_rx
+        .try_recv()
+        .expect("fake launcher reported its grandchild");
+    let _cleanup = KillOnFail(grandchild);
+
+    let error = format!("{:?}", result.expect_err("early non-zero exit is an error"));
+    assert!(
+        error.contains("Process exited with exit status: 3"),
+        "unexpected error: {error}"
+    );
+    assert!(
+        error.contains(PID_PREFIX),
+        "stderr tail missing from: {error}"
+    );
+    assert!(
+        wait_for_exit(grandchild, EXIT_TIMEOUT),
+        "grandchild {grandchild} survived the launcher exit"
+    );
+}
+
+#[tokio::test]
+async fn protocol_shutdown_kills_a_launcher_that_ignores_stdin_eof() {
+    // The `AcpManager::kill` path: the client's main closure returns `Ok(())`
+    // and the protocol shuts down cleanly, but the launcher never exits on
+    // stdin EOF. After the 1s grace the whole tree must be terminated.
+    let (agent, mut pid_rx) = launcher_agent("exec sleep 600");
+    let (grandchild_tx, grandchild_rx) = tokio::sync::oneshot::channel();
+    let result = tokio::time::timeout(
+        PID_TIMEOUT,
+        Client
+            .builder()
+            .connect_with(agent, async move |_cx: ConnectionTo<Agent>| {
+                let pid = pid_rx
+                    .recv()
+                    .await
+                    .expect("fake launcher reported its grandchild");
+                let _ = grandchild_tx.send(pid);
+                Ok(())
+            }),
+    )
+    .await
+    .expect("connection settles after protocol shutdown");
+    let grandchild = grandchild_rx.await.expect("grandchild pid forwarded");
+    let _cleanup = KillOnFail(grandchild);
+
+    assert!(
+        result.is_ok(),
+        "clean protocol shutdown is not an error: {result:?}"
+    );
+    assert!(
+        wait_for_exit(grandchild, EXIT_TIMEOUT),
+        "grandchild {grandchild} survived protocol shutdown"
     );
 }
