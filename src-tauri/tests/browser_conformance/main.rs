@@ -13,6 +13,7 @@ mod cases;
 mod expected;
 #[path = "../browser_fixtures/server.rs"]
 mod fixture_server;
+mod host_log;
 mod profile;
 mod report;
 mod sensitive_cases;
@@ -129,6 +130,7 @@ fn main() {
         return;
     }
 
+    host_log::install();
     // Keeps the webview profile and app data apart from an installed app.
     context.config_mut().identifier = "com.termul-manager.conformance".to_string();
     context.config_mut().app.windows.clear();

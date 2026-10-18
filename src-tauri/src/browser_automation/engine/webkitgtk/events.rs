@@ -52,6 +52,7 @@ fn attach_downloads(webview: &webkit2gtk::WebView, events: TabEvents) {
         if download.web_view().as_ref() != Some(&own) {
             return;
         }
+        log::info!("[browser-agent] webkit download started");
         let starting = events.clone();
         download.connect_decide_destination(move |download, suggested| {
             let decided = download_url(download)
@@ -65,7 +66,10 @@ fn attach_downloads(webview: &webkit2gtk::WebView, events: TabEvents) {
         });
         let failed = Rc::new(Cell::new(false));
         let failed_flag = failed.clone();
-        download.connect_failed(move |_, _| failed_flag.set(true));
+        download.connect_failed(move |_, _| {
+            log::info!("[browser-agent] webkit download failed");
+            failed_flag.set(true);
+        });
         let finished = events.clone();
         download.connect_finished(move |download| {
             if let Some(url) = download_url(download) {
