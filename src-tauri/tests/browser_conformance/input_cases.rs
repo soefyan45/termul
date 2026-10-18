@@ -394,3 +394,28 @@ pub async fn actionability_hidden(c: &Ctx<'_>) -> CaseResult {
     )?;
     expect_untouched(c, "hide").await
 }
+
+pub async fn zz_debug_click_after_typing(c: &Ctx<'_>) -> CaseResult {
+    let tab = c.input_tab().await?;
+    let mark = c.mark();
+    c.trusted_click(&tab, FIELD, "focus click").await?;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let input = c.engine.input();
+    let _ = input.key(&tab, KeyInput::Text("abc"), InputMode::Trusted).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    c.trusted_click(&tab, BUTTON, "click").await?;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let adapter: Vec<Value> = c.since(mark);
+    let mark = c.mark();
+    let field = c.ref_of("textbox", "Field").await?;
+    let fill = c.call("fill", json!({ "ref": field, "value": "Ada" })).await;
+    let button = c.ref_of("button", "Press me").await?;
+    let click = c.call("click", json!({ "ref": button })).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let verbs: Vec<Value> = c.since(mark);
+    Err(mismatch(format!(
+        "DEBUG adapter={adapter:?} || fill={:?} click={:?} || verbs={verbs:?}",
+        fill.map_err(|f| f.message),
+        click.map_err(|f| f.message)
+    )))
+}

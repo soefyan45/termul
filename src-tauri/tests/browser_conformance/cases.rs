@@ -60,6 +60,7 @@ pub const CAPABILITIES: &[Capability] = &[
     cap("input_wheel", &["navigate"]),
     cap("input_drag", &["navigate"]),
     cap("focus_retention", &["navigate"]),
+    cap("zz_debug", &["navigate"]),
 ];
 
 pub fn ids() -> Vec<&'static str> {
@@ -515,6 +516,7 @@ pub async fn run(
         "input_wheel" => input_cases::wheel(&ctx).await,
         "input_drag" => input_cases::drag(&ctx).await,
         "focus_retention" => input_cases::focus_retention(&ctx).await,
+        "zz_debug" => input_cases::zz_debug_click_after_typing(&ctx).await,
         other => Err(mismatch(format!("no case named {other}"))),
     };
     engine.end_session(&ctx.session);
